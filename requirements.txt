@@ -1,0 +1,8 @@
+aspose-words==23.7.0
+opencv-contrib-python==4.8.0.76
+opencv-python==4.8.0.74
+Flask==2.3.3
+pandas==2.1.0
+numpy==1.25.2
+mediapipe==0.10.3
+reportlab==4.0.4
