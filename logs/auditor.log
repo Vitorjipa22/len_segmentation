@@ -1,0 +1,7 @@
+2024-08-18 22:12:46,689 INFO [detect.predict:31] Running detection model
+2024-08-18 22:34:39,434 INFO [detect.predict:31] Running detection model
+2024-08-18 22:36:33,401 INFO [detect.predict:31] Running detection model
+2024-08-18 22:39:01,392 INFO [detect.predict:31] Running detection model
+2024-08-18 22:51:35,962 INFO [detect.predict:31] Running detection model
+2024-08-18 22:51:50,498 ERROR [measure.predict:77] Error in measure predict method: type object 'Process' has no attribute 'euclidean_dist'
+2024-08-18 22:53:14,841 INFO [detect.predict:31] Running detection model

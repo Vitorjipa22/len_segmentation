@@ -1,142 +1,134 @@
 import io
-import measure
 import cv2 as cv 
 import numpy as np
 import pandas as pd
-import measure
-import process
-import matplotlib.pyplot as plt
-
-from datetime import datetime
-from process import Len_calculator
-from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import A4
+import sys
+import os
 from flask import Flask, render_template, request, session, send_file
+
+from core.calculation.measure import Measure
+from core.image_analysis.process import Process
+from core.image_analysis.detect import LenDetector
+from core.image_analysis.segment import Segmentator
 
 app = Flask(__name__)
 app.config["SESSION_PERMANENT"] = False
 app.config["SESSION_TYPE"] = "filesystem"
 app.secret_key = 'super secret'
 
-@app.route('/gerar_pdf', methods=['POST'])
-def gerar_pdf():
-    frame = cv.imread('static/assets/img_recortada_'+ session['cpf'] +'.png')
-    contour_img = cv.imread('static/assets/contour_img_'+ session['cpf'] +'.png')
+# Adds the root path to sys.path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+@app.route('/generate_pdf', methods=['POST'])
+def generate_pdf():
+    """
+    Generates a PDF from a processed image and saves the generated file in a specific folder.
+    
+    This endpoint loads the image and contour data from the user's session, processes the information,
+    and generates a report in PDF format.
+    """
+    # Load images and contour data
+    frame = cv.imread('static/assets/img_cropped_' + session['cpf'] + '.png')
+    contour_img = cv.imread('static/assets/contour_img_' + session['cpf'] + '.png')
     contour_img = np.array(cv.cvtColor(contour_img, cv.COLOR_BGR2GRAY))
-    pts = measure.read_csv_pts('static/pts_'+ session['cpf'] +'.csv', [1,2,3])
+    pts = Measure.read_csv_pts('static/pts_' + session['cpf'] + '.csv', [1, 2, 3])
 
-    mesh = pd.read_csv('static/mesh_'+ session['cpf'] +'.csv')
+    # Load and process the mesh
+    mesh = pd.read_csv('static/mesh_' + session['cpf'] + '.csv')
     mesh = np.array(mesh)
-    img, _, session['data'] = measure.draw_lines(frame.copy(), contour_img, mesh, pts, session['cpf'])
+    
+    # Draw lines and process the image
+    img, _, session['data'] = Measure.draw_lines(frame.copy(), contour_img, mesh, pts, session['cpf'])
+    
+    # Create the PDF
+    Measure.create_pdf(session['data'], name=session['name'], CPF=session['cpf'], tel=session['cpf'], path='static/dossier/pdf_' + session['cpf'] + '.pdf')
 
-    cv.imwrite('static/assets/'+ session['cpf'] +'.png', img)
-    measure.create_pdf(session['data'], nome=session['nome'], CPF=session['cpf'], tel=session['cpf'], path= 'static/dossie/pdf_'+ session['cpf'] +'.pdf')
-    # iris2.create_pdf([], nome=dados[0], CPF=dados[1], tel=dados[2], path= 'static/dossie/pdf_'+ dados[1] +'.pdf')
-    # iris2.create_pdf(path= 'static/dossie/pdf_'+ '03050878274' +'.pdf')
-
-    return render_template('page9.html', cpf = session['cpf'])
+    return render_template('page9.html', cpf=session['cpf'])
 
 @app.route('/save_frame_head', methods=['POST', 'GET'])
 def save_frame_head(): 
-    len = Len_calculator(segment_type = 'vit_b', checkpoint_path='models/sam_vit_b_01ec64.pth')
+    """
+    Processes a received image, detects, segments, and performs measurements.
 
+    This endpoint receives an image via POST, performs detection and segmentation on the image,
+    and calculates measurements based on provided parameters.
+    """
+    if 'image' not in request.files or request.files['image'].filename == '':
+        return "No image part or no selected file", 400
+    
     file = request.files['image']
 
-    if 'image' not in request.files:
-        return "No image part", 400
+    try:
+        med_hor = float(request.form.get('horizontal_measure'))
+        med_vert = float(request.form.get('vertical_measure'))
+    except (TypeError, ValueError):
+        return "Invalid float values", 400
     
-    if file.filename == '':
-        return "No selected file", 400
+    # Initialize detection, segmentation, and processing classes
+    len_detector = LenDetector()
+    segmentator = Segmentator()
+    process = Process()
+    measure = Measure()
+
+    # Read the received image and decode
+    image_stream = file.read()
+    np_img = np.frombuffer(image_stream, np.uint8)
+    image = cv.imdecode(np_img, cv.IMREAD_COLOR)
+
+    # Copy the original image for processing
+    frame_ori = image.copy()
+
+    # Detect bounding boxes
+    boxes = len_detector.predict(frame_ori.copy())
+
+    # Perform segmentation based on the detected boxes
+    mask = segmentator.predict(frame_ori.copy(), boxes)
+
+    # Predict points based on the segmented mask
+    pts = process.predict(frame_ori, mask)
+
+    # Perform measurements and save the result
+    result_img, pts, data = measure.predict(frame_ori, pts, med_hor, med_vert)
+    image = np.asarray(result_img)
+
+    # Encode the image to JPEG format and return the file
+    _, img_encoded = cv.imencode('.jpg', image)
+    img_io = io.BytesIO(img_encoded)
     
-    if file:
-        # Leia a imagem
-        image_stream = file.read()
-        np_img = np.frombuffer(image_stream, np.uint8)
-        image = cv.imdecode(np_img, cv.IMREAD_COLOR)
+    return send_file(img_io, mimetype='image/jpeg')
 
-        # Leia os valores float
-        try:
-            med_hor = float(request.form.get('medida_horizontal'))
-            med_vert = float(request.form.get('medida_vertical'))
+@app.route('/download_pdf', methods=['POST'])
+def download_pdf():
+    """
+    Generates and downloads a PDF based on the information stored in the user's session.
 
-        except (TypeError, ValueError):
-            return "Invalid float values", 400
-        
-        frame_ori = image.copy()
-        mask = len.predict(frame_ori.copy())
+    This endpoint reads processed images, points, and contour data to generate a PDF,
+    which is then sent as a download to the user.
+    """
+    data_index = []
 
-        try:
-            mesh_points = process.getting_mesh_points(frame_ori.copy())
-  
-            img_bin, centroids, largest_area_idxs, labels = process.pre_process(mask)
-            contour_img, sides, centr, pts = process.lens_localization(img_bin, largest_area_idxs, labels, centroids)
-            
-            pts = process.find_biggest_distance(sides, centr, pts)
-
-        except Exception as e:
-            print('Erro na segmentação da lente: ', e)
-
-        pts = process.adding_additional_points(pts, mesh_points, contour_img)
-
-        result_img, pts, data = measure.draw_lines(frame_ori, pts, med_hor, med_vert)
-        image = result_img
-
-
-        _, img_encoded = cv.imencode('.jpg', image)
-        img_io = io.BytesIO(img_encoded)
-        
-        return send_file(img_io, mimetype='image/jpeg')
-
-@app.route('/baixar_pdf', methods=['POST'])
-def baixar_pdf():
-    data_index = list()
-
-    # session['nome'] = 'teste'
-    # session['cpf'] = '888.888.888-88'
-    # session['telefone'] = 'teste'
-    # session['tso'] = 'teste'
-    # session['od_esf'] = 'teste'
-    # session['od_cil'] = 'teste'
-    # session['od_eixo'] = 'teste'
-    # session['od_dnp'] = 'teste'
-    # session['oe_esf'] = 'teste'
-    # session['oe_cil'] = 'teste'
-    # session['oe_eixo'] = 'teste'
-    # session['oe_dnp'] = 'teste'
-    # session['ad'] = 'teste'
-    # session['pl'] = 'teste'
-    # session['prisma'] = 'teste'
-
-    frame = cv.imread('static/assets/frame_'+ session['cpf'] +'.png')
-    contour_img = cv.imread('static/assets/contour_img_'+ session['cpf'] +'.png')
+    # Load the image and contour
+    frame = cv.imread('static/assets/frame_' + session['cpf'] + '.png')
+    contour_img = cv.imread('static/assets/contour_img_' + session['cpf'] + '.png')
     contour_img = np.array(cv.cvtColor(contour_img, cv.COLOR_BGR2GRAY))
-    pts = measure.read_csv_pts('static/pts_'+ session['cpf'] +'.csv', [1,2,3])
+    pts = Measure.read_csv_pts('static/pts_' + session['cpf'] + '.csv', [1, 2, 3])
 
-    mesh = pd.read_csv('static/mesh_'+ session['cpf'] +'.csv')
+    # Load and process the mesh
+    mesh = pd.read_csv('static/mesh_' + session['cpf'] + '.csv')
     mesh = np.array(mesh)
-    img, _, session['data'] = measure.draw_lines(frame.copy(), contour_img, mesh, pts, session['cpf'])
-
-    cv.imwrite('static/assets/'+ session['cpf'] +'.png', img)
-
-    # retirar para subir
-
     
+    # Draw lines and process the image
+    img, _, session['data'] = Measure.draw_lines(frame.copy(), contour_img, mesh, pts, session['cpf'])
+
+    # Populate the data index for the report
+    data_index.extend([session['od_sph'], session['od_cyl'], session['od_axis'], session['od_dnp'],
+                       session['oe_sph'], session['oe_cyl'], session['oe_axis'], session['oe_dnp'],
+                       session['add'], session['pl'], session['prism']])
+
+    # Create the PDF and send it for download
+    Measure.create_pdf(session['data'], session)
     
-    data_index.append(session['od_esf'])
-    data_index.append(session['od_cil'])
-    data_index.append(session['od_eixo'])
-    data_index.append(session['od_dnp'])
-    data_index.append(session['oe_esf'])
-    data_index.append(session['oe_cil'])
-    data_index.append(session['oe_eixo'])
-    data_index.append(session['oe_dnp'])
-    data_index.append(session['ad'])
-    data_index.append(session['pl'])
-    data_index.append(session['prisma'])
-
-    measure.create_pdf(session['data'], session)
-
-    return send_file('static/dossie/pdf_'+ session['cpf'] +'.pdf', as_attachment=True)
+    return send_file('static/dossier/pdf_' + session['cpf'] + '.pdf', as_attachment=True)
 
 
 if __name__ == "__main__":
